@@ -1,0 +1,20 @@
+# qmake build files
+Makefile
+.qmake.stash
+*.pro.user
+*.pro.user.*
+
+# Compiled objects and generated Qt sources
+*.o
+qrc_*.cpp
+moc_*.cpp
+uic_*.h
+
+# Local build products
+/writer-todo
+/debug/
+/release/
+
+# Desktop/editor files
+.directory
+*.swp

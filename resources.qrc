@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>checkmark.svg</file>
+        <file>arrow-up.svg</file>
+        <file>arrow-down.svg</file>
+        <file>arrow-up-dark.svg</file>
+        <file>arrow-down-dark.svg</file>
+    </qresource>
+</RCC>
