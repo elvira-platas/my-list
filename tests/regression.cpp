@@ -2,6 +2,7 @@
 #include "../main.cpp"
 #undef main
 #include <QtTest/QTest>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <cstdlib>
 
@@ -168,6 +169,61 @@ int main(int argc, char **argv)
         window.findChild<QToolButton *>("addTask")->click();
         row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(list->count() - 1)));
         check(row->editor->currentCharFormat().fontPointSize() == 18, "new tasks inherit size after restart");
+        window.close();
+    }
+    write(R"([{"html":"A long task with several words to wrap while changing font sizes repeatedly.","done":false}])");
+    {
+        TodoWindow window;
+        window.show();
+        window.activateWindow();
+        auto *compact = window.findChild<QToolButton *>("compactMode");
+        compact->setChecked(false);
+        check(!window.windowFlags().testFlag(Qt::FramelessWindowHint), "full view uses native decorations");
+        const WId originalWindow = window.winId();
+        QSignalSpy visibilityChanges(window.windowHandle(), &QWindow::visibleChanged);
+        compact->setChecked(true);
+        check(window.isVisible() && !window.windowFlags().testFlag(Qt::FramelessWindowHint),
+              "compact view keeps native decorations");
+        compact->setChecked(false);
+        check(window.winId() == originalWindow && visibilityChanges.isEmpty(),
+              "mode switches keep native window mapped without recreation");
+        auto *list = window.findChild<QListWidget *>("taskList");
+        auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(0)));
+        auto *size = window.findChild<QSpinBox *>("fontSize");
+        QToolButton *bold = nullptr;
+        QToolButton *italic = nullptr;
+        for (auto *button : window.findChildren<QToolButton *>()) {
+            if (button->text() == "B") bold = button;
+            if (button->text() == "I") italic = button;
+        }
+        for (int i = 0; i < 30; ++i) {
+            row->editor->setFocus();
+            row->editor->selectAll();
+            size->setFocus();
+            size->setValue(i % 2 ? 12 : 48);
+            bold->click();
+            italic->click();
+            QTest::qWait(5);
+        }
+        QTest::qWait(100);
+        QSignalSpy layoutChanges(list->model(), &QAbstractItemModel::dataChanged);
+        QTest::qWait(150);
+        check(layoutChanges.count() < 5, "row layout settles after repeated formatting");
+        auto *menu = window.findChild<QWidget *>("settingsPanel");
+        window.findChild<QToolButton *>("appearanceSettings")->click();
+        check(menu->isVisible() && !menu->isWindow(), "settings share the application surface");
+        QTest::qWait(20);
+        check(!menu->testAttribute(Qt::WA_TranslucentBackground), "settings popup uses an opaque window surface");
+        const auto initialPixels = menu->grab().toImage();
+        for (int y = 20; y < initialPixels.height() - 20; y += 20)
+            check(initialPixels.pixelColor(4, y).alpha() == 255, "menu background opaque before pointer movement");
+        for (int i = 0; i < 4; ++i) {
+            QTest::mouseMove(menu, QPoint(50, 30 + i * 30));
+            QTest::qWait(10);
+            const auto pixels = menu->grab().toImage();
+            check(pixels.pixelColor(4, pixels.height() / 2).alpha() == 255, "menu surface remains opaque during hover");
+        }
+        menu->hide();
         window.close();
     }
     write("broken JSON");

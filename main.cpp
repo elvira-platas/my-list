@@ -12,7 +12,6 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMainWindow>
-#include <QMenu>
 #include <QAction>
 #include <QMouseEvent>
 #include <QPainter>
@@ -34,11 +33,58 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <QWidgetAction>
 #include <functional>
 #include <optional>
 #include <QPointer>
 #include <QScopedValueRollback>
+#include <QWindow>
+#include <cmath>
+
+// Settings are part of the application surface, not a separate compositor popup.
+class SettingsPanel : public QWidget
+{
+public:
+    explicit SettingsPanel(QWidget *parent) : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("settingsPanel"));
+        setFocusPolicy(Qt::StrongFocus);
+        content = new QVBoxLayout(this);
+        content->setContentsMargins(8, 8, 8, 8);
+        content->setSpacing(0);
+        hide();
+    }
+
+    QAction *addToggle(const QString &text)
+    {
+        auto *action = new QAction(text, this);
+        action->setCheckable(true);
+        auto *box = new QCheckBox(text, this);
+        box->setMinimumHeight(64);
+        content->addWidget(box);
+        connect(box, &QCheckBox::toggled, action, &QAction::setChecked);
+        connect(action, &QAction::toggled, box, &QCheckBox::setChecked);
+        connect(action, &QAction::changed, box, [action, box] {
+            box->setToolTip(action->toolTip());
+        });
+        return action;
+    }
+
+    void addControl(QWidget *control) { content->addWidget(control); }
+    QColor surface = QColor(20, 23, 31);
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(surface);
+        painter.drawRoundedRect(QRectF(rect()), 12, 12);
+    }
+
+private:
+    QVBoxLayout *content;
+};
 
 class TaskList : public QListWidget
 {
@@ -161,7 +207,7 @@ public:
         layout->addWidget(removeButton, 0, Qt::AlignVCenter);
 
         connect(editor, &QTextEdit::textChanged, this, [this] {
-            adjustHeight();
+            requestHeightUpdate();
         });
     }
 
@@ -179,11 +225,14 @@ public:
 
     void adjustHeight()
     {
-        editor->document()->setTextWidth(qMax(1, editor->viewport()->width()));
-        const int documentHeight = qRound(editor->document()->documentLayout()->documentSize().height());
+        // QTextEdit owns document width; changing it here can trigger layout loops.
+        const int documentHeight = int(std::ceil(editor->document()->documentLayout()->documentSize().height()));
         const int editorHeight = qMax(28, documentHeight + 8);
-        editor->setFixedHeight(editorHeight);
-        setMinimumHeight(qMax(52, editorHeight + 10));
+        if (editor->height() != editorHeight)
+            editor->setFixedHeight(editorHeight);
+        const int rowHeight = qMax(54, editorHeight + 10);
+        if (minimumHeight() != rowHeight)
+            setMinimumHeight(rowHeight);
     }
 
     void requestHeightUpdate()
@@ -257,26 +306,32 @@ public:
         settingsButton->setAccessibleName(QStringLiteral("Appearance settings"));
         settingsButton->setFocusPolicy(Qt::StrongFocus);
         settingsButton->setFixedSize(44, 44);
-        settingsMenu = new QMenu(settingsButton);
-        // Only the rounded corners are transparent; the menu surface stays opaque.
-        settingsMenu->setAttribute(Qt::WA_TranslucentBackground);
-        settingsMenu->setWindowOpacity(1.0);
+        settingsMenu = new SettingsPanel(panel);
         settingsMenu->setMinimumWidth(320);
-        connect(settingsButton, &QToolButton::clicked, this, [this, settingsButton] {
+        connect(settingsButton, &QToolButton::clicked, this, [this, settingsButton, panel] {
+            if (settingsMenu->isVisible()) {
+                settingsMenu->hide();
+                return;
+            }
             settingsMenu->ensurePolished();
-            const int menuWidth = settingsMenu->sizeHint().width();
-            const QPoint position = settingsButton->mapToGlobal(
-                QPoint(settingsButton->width() - menuWidth, settingsButton->height() + 12));
-            settingsMenu->popup(position);
+            settingsMenu->adjustSize();
+            const QPoint anchor = settingsButton->mapTo(panel, QPoint(settingsButton->width(), settingsButton->height() + 12));
+            const int requiredHeight = anchor.y() + settingsMenu->height() + 8;
+            if (panel->height() < requiredHeight)
+                resize(width(), height() + requiredHeight - panel->height());
+            settingsMenu->move(qMax(8, anchor.x() - settingsMenu->width()), anchor.y());
+            settingsMenu->show();
+            settingsMenu->raise();
+            settingsMenu->setFocus();
         });
         heading->insertWidget(2, settingsButton);
 
-        transparent = settingsMenu->addAction(QStringLiteral("Transparent background"));
+        transparent = settingsMenu->addToggle(QStringLiteral("Transparent background"));
         transparent->setCheckable(true);
         transparent->setToolTip(QStringLiteral("Remove the window background for VR mode"));
         transparent->setChecked(QSettings().value(QStringLiteral("transparentBackground"), true).toBool());
 
-        systemTheme = settingsMenu->addAction(QStringLiteral("Use system theme"));
+        systemTheme = settingsMenu->addToggle(QStringLiteral("Use system theme"));
         systemTheme->setCheckable(true);
         systemTheme->setToolTip(QStringLiteral("Use the current KDE color scheme"));
         systemTheme->setChecked(QSettings().value(QStringLiteral("useSystemTheme"), false).toBool());
@@ -293,9 +348,7 @@ public:
         opacityLayout->addWidget(lessOpacity);
         opacityLayout->addWidget(opacityLabel, 1);
         opacityLayout->addWidget(moreOpacity);
-        auto *opacityAction = new QWidgetAction(settingsMenu);
-        opacityAction->setDefaultWidget(opacityPanel);
-        settingsMenu->addAction(opacityAction);
+        settingsMenu->addControl(opacityPanel);
         auto updateOpacity = [this, opacityLabel, lessOpacity, moreOpacity] {
             opacityLabel->setText(QStringLiteral("Task background\n%1%").arg(rowOpacity));
             lessOpacity->setEnabled(rowOpacity > 0);
@@ -329,9 +382,7 @@ public:
         sizeLayout->addWidget(smaller);
         sizeLayout->addWidget(sizeLabel, 1);
         sizeLayout->addWidget(larger);
-        auto *sizeAction = new QWidgetAction(settingsMenu);
-        sizeAction->setDefaultWidget(sizePanel);
-        settingsMenu->addAction(sizeAction);
+        settingsMenu->addControl(sizePanel);
         auto updateSize = [this, sizeLabel, smaller, larger] {
             sizeLabel->setText(QStringLiteral("All task text\n%1 pt").arg(defaultTaskSize));
             smaller->setEnabled(defaultTaskSize > 8);
@@ -365,7 +416,7 @@ public:
         fontSize->setSuffix(QStringLiteral(" pt"));
         fontSize->setToolTip(QStringLiteral("Font size — type a number or use the arrows"));
         fontSize->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
-        fontSize->setMinimumSize(110, 44);
+        fontSize->setMinimumHeight(44);
         fontSize->setAlignment(Qt::AlignCenter);
         fontSize->setKeyboardTracking(false);
 
@@ -420,6 +471,7 @@ public:
 
         connect(compactButton, &QToolButton::toggled, this,
                 [this, formatPanel, formatBar, heading, settingsButton, root](bool compact) {
+            settingsMenu->hide();
             settingsButton->setVisible(!compact);
             formatPanel->setVisible(!compact);
             if (compact) {
@@ -465,11 +517,17 @@ public:
         connect(saveShortcut, &QShortcut::activated, this, [this] { saveTasks(); });
         auto *deleteShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Delete")), this);
         connect(deleteShortcut, &QShortcut::activated, this, [this] { removeCurrentTask(); });
+        qApp->installEventFilter(this);
         loadTasks();
         const QSize savedSize = QSettings().value(QStringLiteral("windowSize"), QSize(620, 700)).toSize();
         if (savedSize.isValid() && !savedSize.isEmpty()) {
             resize(savedSize.expandedTo(minimumSize()));
         }
+    }
+
+    ~TodoWindow() override
+    {
+        qApp->removeEventFilter(this);
     }
 
 protected:
@@ -495,7 +553,23 @@ protected:
 
     bool eventFilter(QObject *object, QEvent *event) override
     {
-        if (event->type() == QEvent::FocusIn) {
+        auto *widget = qobject_cast<QWidget *>(object);
+        const bool ours = widget && widget->window() == this;
+        if (ours && settingsMenu->isVisible()) {
+            if (event->type() == QEvent::KeyPress
+                && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+                settingsMenu->hide();
+                return true;
+            }
+            if (event->type() == QEvent::MouseButtonPress && widget != settingsMenu
+                && !settingsMenu->isAncestorOf(widget)
+                && widget->objectName() != QStringLiteral("appearanceSettings"))
+                settingsMenu->hide();
+        }
+        // Hover hints distract during head-gaze use; retain descriptions for accessibility.
+        if (ours && event->type() == QEvent::ToolTip)
+            return true;
+        if (event->type() == QEvent::FocusIn && ours) {
             for (int i = 0; i < list->count(); ++i) {
                 auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(i)));
                 if (row && (object == row->editor || object == row->checkBox)) {
@@ -557,8 +631,6 @@ private:
         list->setItemWidget(item, row);
         list->setCurrentItem(item);
         row->editor->setFocus();
-        row->editor->installEventFilter(this);
-        row->checkBox->installEventFilter(this);
         connect(row->editor, &QTextEdit::currentCharFormatChanged, this, [this, row] {
             if (currentEditor() == row->editor)
                 syncFormatControls(row->editor);
@@ -567,14 +639,16 @@ private:
             list->startDragging(item);
         };
         row->sizeChangedCallback = [item, row] {
-            item->setSizeHint(QSize(0, row->minimumHeight()));
+            const QSize size(0, row->minimumHeight());
+            if (item->sizeHint() != size)
+                item->setSizeHint(size);
         };
         connect(row->removeButton, &QToolButton::clicked, this, [this, item] {
             removeTask(item);
         });
 
         connect(row->editor, &QTextEdit::textChanged, this, [this, item, row] {
-            item->setSizeHint(QSize(0, row->minimumHeight()));
+            row->requestHeightUpdate();
             saveTasks();
         });
         connect(row->focusButton, &QToolButton::toggled, this, [this, row](bool active) {
@@ -668,18 +742,18 @@ private:
         auto *editor = currentEditor();
         if (!editor)
             return;
-        QTextCursor cursor = editor->textCursor();
-        QTextCharFormat format = cursor.charFormat();
-        formatter(format);
-        cursor.mergeCharFormat(format);
-        editor->setCurrentCharFormat(format);
-        syncFormatControls(editor);
-        if (auto *row = currentRowWidget()) {
-            row->adjustHeight();
-            if (list->currentItem())
-                list->currentItem()->setSizeHint(QSize(0, row->minimumHeight()));
+        {
+            const QScopedValueRollback<bool> guard(loading, true);
+            QTextCharFormat format;
+            formatter(format);
+            editor->mergeCurrentCharFormat(format);
         }
-        editor->setFocus();
+        syncFormatControls(editor);
+        if (auto *row = currentRowWidget())
+            row->requestHeightUpdate();
+        // Keep focus in the spin box while its value is being committed.
+        if (!fontSize->hasFocus())
+            editor->setFocus();
         saveTasks();
     }
 
@@ -734,14 +808,16 @@ private:
 
     void toggleBold()
     {
-        applyFormat([](QTextCharFormat &format) {
-            format.setFontWeight(format.fontWeight() == QFont::Bold ? QFont::Normal : QFont::Bold);
+        const bool bold = currentEditor() && currentEditor()->fontWeight() >= QFont::Bold;
+        applyFormat([bold](QTextCharFormat &format) {
+            format.setFontWeight(bold ? QFont::Normal : QFont::Bold);
         });
     }
 
     void toggleItalic()
     {
-        applyFormat([](QTextCharFormat &format) { format.setFontItalic(!format.fontItalic()); });
+        const bool italic = currentEditor() && currentEditor()->fontItalic();
+        applyFormat([italic](QTextCharFormat &format) { format.setFontItalic(!italic); });
     }
 
     QString dataPath() const
@@ -929,25 +1005,21 @@ private:
         updateCompletedIcon();
         const QColor menuBackground = useSystem ? palette.color(QPalette::AlternateBase)
             : (clear ? QColor(20, 23, 31) : QColor(60, 66, 82));
+        settingsMenu->surface = menuBackground;
+        settingsMenu->update();
         const QColor menuHover = useSystem ? palette.color(QPalette::Highlight) : QColor(87, 43, 67);
         const QColor menuHoverText = useSystem ? palette.color(QPalette::HighlightedText) : QColor(Qt::white);
-        // Keep the popup edge subtle against its background in AR displays.
-        const QColor menuBorder(
-            qRound(menuBackground.red() * 0.85 + textColor.red() * 0.15),
-            qRound(menuBackground.green() * 0.85 + textColor.green() * 0.15),
-            qRound(menuBackground.blue() * 0.85 + textColor.blue() * 0.15));
         settingsMenu->setStyleSheet(QStringLiteral(
-            "QMenu { font-size: 18px; padding: 8px; background-color: %1; color: %2; border: 1px solid %5; border-radius: 12px; }"
-            "QMenu QLabel { color: %2; background-color: %1; font-size: 18px; }"
-            "QMenu QToolButton { color: %2; background-color: %1; border: 1px solid %5; border-radius: 7px; font-size: 24px; }"
-            "QMenu QToolButton:hover { background-color: %3; color: %4; }"
-            "QMenu QToolButton:disabled { color: #888888; border-color: #888888; }"
-            "QMenu::item { min-height: 48px; padding: 12px 32px; background-color: %1; color: %2; border-radius: 8px; }"
-            "QMenu::item:selected { background-color: %3; color: %4; }"
-            "QMenu::indicator { width: 24px; height: 24px; border: 2px solid %2; border-radius: 5px; background-color: %1; }"
-            "QMenu::indicator:checked { border-color: #ff4f9a; image: url(:/icons/checkmark.svg); }"
-            "QMenu::indicator:unchecked { image: none; }"
-        ).arg(menuBackground.name(), textColor.name(), menuHover.name(), menuHoverText.name(), menuBorder.name()));
+            "QWidget#settingsPanel QLabel { color: %2; background: transparent; font-size: 18px; }"
+            "QWidget#settingsPanel QToolButton { color: %2; background: transparent; border: 1px solid transparent; border-radius: 7px; font-size: 24px; }"
+            "QWidget#settingsPanel QToolButton:hover { background-color: %3; color: %4; }"
+            "QWidget#settingsPanel QToolButton:disabled { color: #888888; }"
+            "QWidget#settingsPanel QCheckBox { font-size: 18px; padding: 4px 8px; color: %2; background: transparent; border-radius: 8px; spacing: 16px; }"
+            "QWidget#settingsPanel QCheckBox:hover { background-color: %3; color: %4; }"
+            "QWidget#settingsPanel QCheckBox::indicator { width: 24px; height: 24px; border: 2px solid %2; border-radius: 5px; background-color: %1; }"
+            "QWidget#settingsPanel QCheckBox::indicator:checked { border-color: #ff4f9a; image: url(:/icons/checkmark.svg); }"
+            "QWidget#settingsPanel QCheckBox::indicator:unchecked { image: none; }"
+        ).arg(menuBackground.name(), textColor.name(), menuHover.name(), menuHoverText.name()));
         const QColor baseColor = useSystem ? palette.color(QPalette::Base) : QColor(10, 15, 25);
 
         auto rgba = [](QColor color, int alpha) {
@@ -982,26 +1054,28 @@ private:
             "QWidget#taskRow { border: 2px solid transparent; border-radius: 10px; }"
             "QWidget#taskRow[inProgress=\"true\"] { border: 2px solid #ff4f9a; background: rgba(255, 79, 154, 35); }"
             "QToolButton#taskFocus { padding: 0px; font-size: 20px; }"
-            "QToolButton#taskFocus:checked { color: #ff4f9a; border-color: #ff4f9a; }"
+            "QToolButton#taskFocus:checked { color: #ff4f9a; border-color: transparent; }"
             "QToolButton#taskFocus:disabled { color: %4; border-color: transparent; }"
             "QTextEdit { color: %3; background: transparent; font-size: 16pt; }"
             "QCheckBox { color: %3; border-radius: 8px; }"
             "QCheckBox:hover { background: rgba(255, 79, 154, 45); }"
-            "QToolButton, QSpinBox { color: %3; background: %5; border: 1px solid %6; border-radius: 7px; padding: 4px 8px; }"
+            "QToolButton, QSpinBox { color: %3; background: %5; border: 1px solid transparent; border-radius: 7px; padding: 4px 8px; }"
             "QToolButton#appearanceSettings { font-size: 24px; padding: 0px; }"
             "QToolButton#appearanceSettings::menu-indicator { image: none; }"
-            "QToolButton:checked { background: %5; border: 1px solid rgb(255, 79, 154); }"
+            "QToolButton:checked { background: rgba(255, 79, 154, 55); border: 1px solid transparent; }"
             "QToolButton#compactMode { border: 1px solid transparent; }"
-            "QToolButton:hover, QSpinBox:hover { background: rgba(255, 79, 154, 75); border: 1px solid rgb(255, 79, 154); }"
+            "QToolButton:hover { background: rgba(255, 79, 154, 75); border: 1px solid transparent; }"
             "QLabel#dragHandle { color: %4; background: transparent; border-radius: 8px; font-size: 22px; }"
             "QLabel#dragHandle:hover { color: %3; background: rgba(255, 79, 154, 100); }"
             "QToolButton#taskRemove { color: %4; background: transparent; border: 1px solid transparent; border-radius: 8px; font-size: 22px; padding: 0px; }"
-            "QToolButton#taskRemove:hover { color: %3; background: rgba(255, 79, 154, 130); border: 1px solid rgb(255, 79, 154); }"
-            "QSpinBox#fontSize { padding: 2px 30px 2px 8px; }"
-            "QSpinBox#fontSize::up-button, QSpinBox#fontSize::down-button { width: 28px; border-left: 1px solid %6; }"
-            "QSpinBox#fontSize::up-button { subcontrol-position: top right; image: url(%8); }"
-            "QSpinBox#fontSize::down-button { subcontrol-position: bottom right; image: url(%9); }"
-            "QSpinBox#fontSize::up-button:hover, QSpinBox#fontSize::down-button:hover { background: rgba(255, 79, 154, 130); border-left: 1px solid rgb(255, 79, 154); }"
+            "QToolButton#taskRemove:hover { color: %3; background: rgba(255, 79, 154, 130); border: 1px solid transparent; }"
+            "QSpinBox#fontSize { padding: 2px 36px 2px 8px; }"
+            "QSpinBox#fontSize::up-button, QSpinBox#fontSize::down-button { subcontrol-origin: border; width: 32px; border-left: 1px solid transparent; }"
+            "QSpinBox#fontSize::up-button { subcontrol-position: top right; border-top-right-radius: 7px; }"
+            "QSpinBox#fontSize::up-arrow { image: url(%8); width: 18px; height: 12px; }"
+            "QSpinBox#fontSize::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 7px; }"
+            "QSpinBox#fontSize::down-arrow { image: url(%9); width: 18px; height: 12px; }"
+            "QSpinBox#fontSize::up-button:hover, QSpinBox#fontSize::down-button:hover { background: rgba(255, 79, 154, 130); border-left: 1px solid transparent; }"
             "QCheckBox::indicator { width: 20px; height: 20px; border: 2px solid %6; border-radius: 5px; background: %7; }"
             "QCheckBox::indicator:hover { border: 2px solid rgb(255, 79, 154); background: rgba(255, 79, 154, 130); }"
             "QCheckBox::indicator:checked { border: 2px solid rgba(255, 79, 154, 220); background: transparent; image: url(:/icons/checkmark.svg); }"
@@ -1010,6 +1084,9 @@ private:
         setStyleSheet(style.arg(panelBackground).arg(rowBackground).arg(text).arg(hint)
                           .arg(controlBackground).arg(border).arg(indicatorBackground)
                           .arg(arrowUp).arg(arrowDown));
+        fontSize->ensurePolished();
+        // Qt includes the styled buttons, editor margins, and suffix in this hint.
+        fontSize->setFixedWidth(fontSize->sizeHint().width());
     }
 
     struct DeletedTask {
@@ -1029,7 +1106,7 @@ private:
     bool loadFailed = false;
     QLabel *saveError = nullptr;
     TaskList *list = nullptr;
-    QMenu *settingsMenu = nullptr;
+    SettingsPanel *settingsMenu = nullptr;
     QAction *transparent = nullptr;
     QAction *systemTheme = nullptr;
     QToolButton *compactButton = nullptr;
