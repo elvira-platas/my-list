@@ -1004,7 +1004,7 @@ private:
         updateCompactIcon(textColor);
         updateCompletedIcon();
         const QColor menuBackground = useSystem ? palette.color(QPalette::AlternateBase)
-            : (clear ? QColor(20, 23, 31) : QColor(60, 66, 82));
+            : (clear ? QColor(20, 21, 23) : QColor(32, 33, 36));
         settingsMenu->surface = menuBackground;
         settingsMenu->update();
         const QColor menuHover = useSystem ? palette.color(QPalette::Highlight) : QColor(87, 43, 67);
@@ -1020,7 +1020,7 @@ private:
             "QWidget#settingsPanel QCheckBox::indicator:checked { border-color: #ff4f9a; image: url(:/icons/checkmark.svg); }"
             "QWidget#settingsPanel QCheckBox::indicator:unchecked { image: none; }"
         ).arg(menuBackground.name(), textColor.name(), menuHover.name(), menuHoverText.name()));
-        const QColor baseColor = useSystem ? palette.color(QPalette::Base) : QColor(10, 15, 25);
+        const QColor baseColor = useSystem ? palette.color(QPalette::Base) : QColor(14, 15, 17);
 
         auto rgba = [](QColor color, int alpha) {
             color.setAlpha(alpha);
@@ -1031,10 +1031,10 @@ private:
         const QString panelBackground = clear
             ? QStringLiteral("rgba(0, 0, 0, 0)")
             : (useSystem ? rgba(palette.color(QPalette::Window), 245)
-                         : QStringLiteral("rgba(30, 34, 45, 245)"));
+                         : QStringLiteral("rgba(22, 23, 25, 245)"));
         const QString rowBackground = useSystem
             ? rgba(palette.color(QPalette::AlternateBase), qRound(rowOpacity * 2.55))
-            : rgba(clear ? QColor(30, 34, 45) : QColor(60, 66, 82), qRound(rowOpacity * 2.55));
+            : rgba(clear ? QColor(24, 25, 27) : QColor(42, 43, 46), qRound(rowOpacity * 2.55));
         const QString controlBackground = useSystem
             ? rgba(palette.color(QPalette::Button), 245)
             : panelBackground;

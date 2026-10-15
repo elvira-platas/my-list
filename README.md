@@ -4,6 +4,10 @@ A small task list for KDE Plasma. Made for use in AR glasses with KWin VR and a 
 
 Tasks stay on your computer and save automatically. The background is transparent by default; appearance settings let you adjust it.
 
+![My List with a demo task list: feed the dragon, order fireproof curtains, and other daily chores.](docs/my-list.png)
+
+Desktop screenshot on KDE Plasma with a demo list.
+
 ## Build and run
 
 Requires Qt 6 development packages (Widgets and qmake), a C++17 compiler, and Make.
@@ -49,4 +53,6 @@ The code was generated and revised by OpenAI Codex, an AI coding assistant. Elvi
 
 ## License
 
-[MIT License](LICENSE).
+Project source files and bundled SVG icons are provided under the [MIT License](LICENSE).
+
+Qt is a separate dependency with its own [licensing terms](https://doc.qt.io/qt-6/licensing.html); its libraries are not bundled in this repository.

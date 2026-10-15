@@ -1,0 +1,32 @@
+[
+  {
+    "html": "<p style=\"font-size:18pt;\">Feed the dragon</p>",
+    "done": true,
+    "inProgress": false
+  },
+  {
+    "html": "<p style=\"font-size:18pt;\">Order fireproof curtains</p>",
+    "done": false,
+    "inProgress": true
+  },
+  {
+    "html": "<p style=\"font-size:18pt;\">Reply to the wizard</p>",
+    "done": false,
+    "inProgress": false
+  },
+  {
+    "html": "<p style=\"font-size:18pt;\">Water the suspicious plant</p>",
+    "done": false,
+    "inProgress": false
+  },
+  {
+    "html": "<p style=\"font-size:18pt;\">Back up the spellbook</p>",
+    "done": false,
+    "inProgress": false
+  },
+  {
+    "html": "<p style=\"font-size:18pt;\">Return the borrowed moon</p>",
+    "done": false,
+    "inProgress": false
+  }
+]
