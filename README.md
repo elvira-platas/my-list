@@ -7,8 +7,10 @@ A small task list for KDE Plasma and KWin VR mode.
 - regular tasks with checkboxes;
 - bold and italic text;
 - font size from 8 to 72 pt;
-- transparent background for VR;
-- automatic local saving.
+- transparent background enabled by default for AR/VR, with your choice remembered;
+- larger controls for head-controlled pointers;
+- atomic automatic local saving with visible error messages;
+- Ctrl+N to add, Ctrl+S to save, Ctrl+Shift+Delete to remove the current task.
 
 ## Authorship
 
@@ -31,3 +33,17 @@ The task list is saved in KDE's application data directory.
 ## License
 
 This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for the full text.
+
+## Regression checks
+
+Run in a separate build directory (requires Qt Test):
+
+```bash
+mkdir -p /tmp/writer-todo-regression
+cd /tmp/writer-todo-regression
+qmake6 /path/to/writer-todo/tests/regression.pro
+make -j2
+QT_QPA_PLATFORM=offscreen ./regression
+```
+
+Tests use temporary data and settings, leaving your task list untouched.
