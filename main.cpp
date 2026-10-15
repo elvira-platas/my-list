@@ -12,9 +12,16 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMenu>
+#include <QAction>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
+#include <QIcon>
 #include <QResizeEvent>
 #include <QSpinBox>
+#include <QStyle>
 #include <QStandardPaths>
 #include <QSettings>
 #include <QSaveFile>
@@ -27,7 +34,11 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QWidgetAction>
 #include <functional>
+#include <optional>
+#include <QPointer>
+#include <QScopedValueRollback>
 
 class TaskList : public QListWidget
 {
@@ -104,6 +115,17 @@ public:
     explicit TaskRow(QWidget *parent = nullptr)
         : QWidget(parent)
     {
+        setObjectName(QStringLiteral("taskRow"));
+        setAttribute(Qt::WA_StyledBackground);
+        setProperty("inProgress", false);
+        focusButton = new QToolButton(this);
+        focusButton->setObjectName(QStringLiteral("taskFocus"));
+        focusButton->setText(QStringLiteral("▶"));
+        focusButton->setCheckable(true);
+        focusButton->setFixedSize(44, 44);
+        focusButton->setToolTip(QStringLiteral("Work on this task now"));
+        focusButton->setAccessibleName(QStringLiteral("Current task"));
+
         checkBox = new QCheckBox(this);
         checkBox->setToolTip(QStringLiteral("Mark as completed"));
         // Keep the checkbox visually compact, while leaving a little extra
@@ -115,7 +137,7 @@ public:
         removeButton = new QToolButton(this);
         removeButton->setObjectName(QStringLiteral("taskRemove"));
         removeButton->setText(QStringLiteral("×"));
-        removeButton->setToolTip(QStringLiteral("Delete this task"));
+        removeButton->setToolTip(QStringLiteral("Delete this task\nCtrl+Shift+Delete — delete the selected task"));
         removeButton->setFixedSize(44, 44);
         removeButton->setCursor(Qt::PointingHandCursor);
 
@@ -135,11 +157,24 @@ public:
         layout->addWidget(checkBox, 0, Qt::AlignVCenter);
         layout->addWidget(dragHandle, 0, Qt::AlignVCenter);
         layout->addWidget(editor, 1, Qt::AlignVCenter);
+        layout->addWidget(focusButton, 0, Qt::AlignVCenter);
         layout->addWidget(removeButton, 0, Qt::AlignVCenter);
 
         connect(editor, &QTextEdit::textChanged, this, [this] {
             adjustHeight();
         });
+    }
+
+    void setInProgress(bool active)
+    {
+        const QSignalBlocker blocker(focusButton);
+        focusButton->setChecked(active);
+        focusButton->setToolTip(active ? QStringLiteral("Stop highlighting this task")
+                                      : QStringLiteral("Work on this task now"));
+        setProperty("inProgress", active);
+        style()->unpolish(this);
+        style()->polish(this);
+        update();
     }
 
     void adjustHeight()
@@ -166,6 +201,7 @@ public:
 
     std::function<void()> sizeChangedCallback;
 
+    QToolButton *focusButton = nullptr;
     QCheckBox *checkBox = nullptr;
     DragHandle *dragHandle = nullptr;
     QTextEdit *editor = nullptr;
@@ -199,27 +235,124 @@ public:
         root->setSpacing(10);
 
         auto *heading = new QHBoxLayout;
-        auto *title = new QLabel(QStringLiteral("My List"), panel);
-        title->setObjectName(QStringLiteral("title"));
-        heading->addWidget(title);
+        addButton = makeButton(QString(), QStringLiteral("Add a task (Ctrl+N)"));
+        addButton->setObjectName(QStringLiteral("addTask"));
+        addButton->setAccessibleName(QStringLiteral("Add a task"));
+        addButton->setFixedSize(56, 56);
+        addButton->setIconSize(QSize(28, 28));
+        addButton->setFocusPolicy(Qt::StrongFocus);
+        heading->addWidget(addButton);
         heading->addStretch();
+        compactButton = makeButton(QString(), QStringLiteral("Show only tasks"));
+        compactButton->setObjectName(QStringLiteral("compactMode"));
+        compactButton->setCheckable(true);
+        compactButton->setFixedSize(44, 44);
+        compactButton->setIconSize(QSize(24, 24));
+        compactButton->setAccessibleName(QStringLiteral("Compact mode"));
+        compactButton->setFocusPolicy(Qt::StrongFocus);
+        heading->addWidget(compactButton);
 
-        transparent = new QCheckBox(QStringLiteral("Transparent background"), panel);
+        auto *settingsButton = makeButton(QStringLiteral("⚙"), QStringLiteral("Appearance settings"));
+        settingsButton->setObjectName(QStringLiteral("appearanceSettings"));
+        settingsButton->setAccessibleName(QStringLiteral("Appearance settings"));
+        settingsButton->setFocusPolicy(Qt::StrongFocus);
+        settingsButton->setFixedSize(44, 44);
+        settingsMenu = new QMenu(settingsButton);
+        // Only the rounded corners are transparent; the menu surface stays opaque.
+        settingsMenu->setAttribute(Qt::WA_TranslucentBackground);
+        settingsMenu->setWindowOpacity(1.0);
+        settingsMenu->setMinimumWidth(320);
+        connect(settingsButton, &QToolButton::clicked, this, [this, settingsButton] {
+            settingsMenu->ensurePolished();
+            const int menuWidth = settingsMenu->sizeHint().width();
+            const QPoint position = settingsButton->mapToGlobal(
+                QPoint(settingsButton->width() - menuWidth, settingsButton->height() + 12));
+            settingsMenu->popup(position);
+        });
+        heading->insertWidget(2, settingsButton);
+
+        transparent = settingsMenu->addAction(QStringLiteral("Transparent background"));
+        transparent->setCheckable(true);
         transparent->setToolTip(QStringLiteral("Remove the window background for VR mode"));
         transparent->setChecked(QSettings().value(QStringLiteral("transparentBackground"), true).toBool());
-        root->addWidget(transparent);
 
-        systemTheme = new QCheckBox(QStringLiteral("Use system theme"), panel);
+        systemTheme = settingsMenu->addAction(QStringLiteral("Use system theme"));
+        systemTheme->setCheckable(true);
         systemTheme->setToolTip(QStringLiteral("Use the current KDE color scheme"));
         systemTheme->setChecked(QSettings().value(QStringLiteral("useSystemTheme"), false).toBool());
-        root->addWidget(systemTheme);
+        rowOpacity = qBound(0, QSettings().value(QStringLiteral("rowOpacity"), 50).toInt(), 100);
+        auto *opacityPanel = new QWidget(settingsMenu);
+        auto *opacityLayout = new QHBoxLayout(opacityPanel);
+        opacityLayout->setContentsMargins(8, 12, 8, 12);
+        auto *lessOpacity = makeButton(QStringLiteral("−"), QStringLiteral("Lighter task background"));
+        auto *moreOpacity = makeButton(QStringLiteral("+"), QStringLiteral("Denser task background"));
+        lessOpacity->setFixedSize(56, 56);
+        moreOpacity->setFixedSize(56, 56);
+        auto *opacityLabel = new QLabel(opacityPanel);
+        opacityLabel->setAlignment(Qt::AlignCenter);
+        opacityLayout->addWidget(lessOpacity);
+        opacityLayout->addWidget(opacityLabel, 1);
+        opacityLayout->addWidget(moreOpacity);
+        auto *opacityAction = new QWidgetAction(settingsMenu);
+        opacityAction->setDefaultWidget(opacityPanel);
+        settingsMenu->addAction(opacityAction);
+        auto updateOpacity = [this, opacityLabel, lessOpacity, moreOpacity] {
+            opacityLabel->setText(QStringLiteral("Task background\n%1%").arg(rowOpacity));
+            lessOpacity->setEnabled(rowOpacity > 0);
+            moreOpacity->setEnabled(rowOpacity < 100);
+        };
+        updateOpacity();
+        connect(lessOpacity, &QToolButton::clicked, this, [this, updateOpacity] {
+            rowOpacity = qMax(0, rowOpacity - 10);
+            QSettings().setValue(QStringLiteral("rowOpacity"), rowOpacity);
+            updateOpacity();
+            applyStyle();
+        });
+        connect(moreOpacity, &QToolButton::clicked, this, [this, updateOpacity] {
+            rowOpacity = qMin(100, rowOpacity + 10);
+            QSettings().setValue(QStringLiteral("rowOpacity"), rowOpacity);
+            updateOpacity();
+            applyStyle();
+        });
+        defaultTaskSize = qBound(8, QSettings().value(QStringLiteral("defaultTaskSize"), 16).toInt(), 72);
+        auto *sizePanel = new QWidget(settingsMenu);
+        auto *sizeLayout = new QHBoxLayout(sizePanel);
+        sizeLayout->setContentsMargins(8, 12, 8, 12);
+        auto *smaller = makeButton(QStringLiteral("−"), QStringLiteral("Smaller text in all tasks"));
+        auto *larger = makeButton(QStringLiteral("+"), QStringLiteral("Larger text in all tasks"));
+        smaller->setObjectName(QStringLiteral("allTasksSmaller"));
+        larger->setObjectName(QStringLiteral("allTasksLarger"));
+        smaller->setFixedSize(56, 56);
+        larger->setFixedSize(56, 56);
+        auto *sizeLabel = new QLabel(sizePanel);
+        sizeLabel->setAlignment(Qt::AlignCenter);
+        sizeLayout->addWidget(smaller);
+        sizeLayout->addWidget(sizeLabel, 1);
+        sizeLayout->addWidget(larger);
+        auto *sizeAction = new QWidgetAction(settingsMenu);
+        sizeAction->setDefaultWidget(sizePanel);
+        settingsMenu->addAction(sizeAction);
+        auto updateSize = [this, sizeLabel, smaller, larger] {
+            sizeLabel->setText(QStringLiteral("All task text\n%1 pt").arg(defaultTaskSize));
+            smaller->setEnabled(defaultTaskSize > 8);
+            larger->setEnabled(defaultTaskSize < 72);
+        };
+        updateSize();
+        connect(smaller, &QToolButton::clicked, this, [this, updateSize] {
+            setAllTaskSizes(qMax(8, defaultTaskSize - 2));
+            updateSize();
+        });
+        connect(larger, &QToolButton::clicked, this, [this, updateSize] {
+            setAllTaskSizes(qMin(72, defaultTaskSize + 2));
+            updateSize();
+        });
         root->insertLayout(0, heading);
 
-        auto *formatBar = new QHBoxLayout;
+        auto *formatPanel = new QWidget(panel);
+        auto *formatBar = new QHBoxLayout(formatPanel);
+        formatBar->setContentsMargins(0, 0, 0, 0);
         formatBar->setSpacing(5);
 
-        addButton = makeButton(QStringLiteral("+"), QStringLiteral("Add a task"));
-        removeButton = makeButton(QStringLiteral("−"), QStringLiteral("Remove the selected task"));
         boldButton = makeButton(QStringLiteral("B"), QStringLiteral("Bold"));
         italicButton = makeButton(QStringLiteral("I"), QStringLiteral("Italic"));
         boldButton->setCheckable(true);
@@ -236,15 +369,13 @@ public:
         fontSize->setAlignment(Qt::AlignCenter);
         fontSize->setKeyboardTracking(false);
 
-        formatBar->addWidget(addButton);
-        formatBar->addWidget(removeButton);
-        formatBar->addSpacing(12);
         formatBar->addWidget(boldButton);
         formatBar->addWidget(italicButton);
         formatBar->addWidget(fontSize);
         formatBar->addStretch();
         list = new TaskList(panel);
         list->setObjectName(QStringLiteral("taskList"));
+        list->setToolTip(QStringLiteral("Tasks are saved automatically. Ctrl+S — save now."));
         list->setFrameShape(QFrame::NoFrame);
         list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         list->setSpacing(6);
@@ -258,33 +389,72 @@ public:
             saveTasks();
         });
         root->addWidget(list, 1);
+        completedButton = makeButton(QString(), QStringLiteral("Hide or show completed tasks"));
+        completedButton->setObjectName(QStringLiteral("completedTasks"));
+        completedButton->setCheckable(true);
+        completedButton->setChecked(QSettings().value(QStringLiteral("hideCompleted"), false).toBool());
+        completedButton->setMinimumSize(88, 56);
+        completedButton->setIconSize(QSize(28, 28));
+        completedButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        completedButton->setFocusPolicy(Qt::StrongFocus);
+        completedButton->hide();
+        formatBar->addWidget(completedButton);
+        connect(completedButton, &QToolButton::toggled, this, [this](bool hide) {
+            QSettings().setValue(QStringLiteral("hideCompleted"), hide);
+            updateCompletedVisibility();
+        });
+        restoreButton = makeButton(QStringLiteral("↶ Restore task"), QStringLiteral("Restore the last deleted task"));
+        restoreButton->setObjectName(QStringLiteral("restoreTask"));
+        restoreButton->setMinimumHeight(56);
+        restoreButton->setFocusPolicy(Qt::StrongFocus);
+        restoreButton->hide();
+        root->addWidget(restoreButton);
+        connect(restoreButton, &QToolButton::clicked, this, [this] { restoreTask(); });
 
-        auto *hint = new QLabel(QStringLiteral("Ctrl+N — new task    Ctrl+S — save    Ctrl+Shift+Delete — remove"), panel);
-        hint->setWordWrap(true);
-        hint->setObjectName(QStringLiteral("hint"));
-        root->addWidget(hint);
         saveError = new QLabel(panel);
         saveError->setWordWrap(true);
         saveError->setStyleSheet(QStringLiteral("color: #ffb7b7; background: #402020; padding: 8px;"));
         saveError->hide();
         root->addWidget(saveError);
-        root->addLayout(formatBar);
+        root->addWidget(formatPanel);
+
+        connect(compactButton, &QToolButton::toggled, this,
+                [this, formatPanel, formatBar, heading, settingsButton, root](bool compact) {
+            settingsButton->setVisible(!compact);
+            formatPanel->setVisible(!compact);
+            if (compact) {
+                formatBar->removeWidget(completedButton);
+                heading->insertWidget(heading->indexOf(compactButton), completedButton);
+            } else {
+                heading->removeWidget(completedButton);
+                formatBar->addWidget(completedButton);
+            }
+            completedButton->setVisible(completedCount > 0);
+            root->setContentsMargins(compact ? 8 : 18, compact ? 8 : 16,
+                                     compact ? 8 : 18, compact ? 8 : 18);
+            setMinimumSize(compact ? QSize(320, 200) : QSize(420, 320));
+            compactButton->setAccessibleName(compact ? QStringLiteral("Full view") : QStringLiteral("Compact mode"));
+            compactButton->setToolTip(compact ? QStringLiteral("Show settings and formatting")
+                                              : QStringLiteral("Show only tasks"));
+            QSettings().setValue(QStringLiteral("compactMode"), compact);
+            applyStyle();
+        });
+        compactButton->setChecked(QSettings().value(QStringLiteral("compactMode"), false).toBool());
 
         setCentralWidget(panel);
         applyStyle();
 
         connect(addButton, &QToolButton::clicked, this, [this] { addTask(); saveTasks(); });
-        connect(removeButton, &QToolButton::clicked, this, [this] { removeCurrentTask(); });
         connect(boldButton, &QToolButton::clicked, this, [this] { toggleBold(); });
         connect(italicButton, &QToolButton::clicked, this, [this] { toggleItalic(); });
         connect(fontSize, qOverload<int>(&QSpinBox::valueChanged), this, [this](int size) {
             applyFormat([size](QTextCharFormat &format) { format.setFontPointSize(size); });
         });
-        connect(transparent, &QCheckBox::toggled, this, [this](bool enabled) {
+        connect(transparent, &QAction::toggled, this, [this](bool enabled) {
             QSettings().setValue(QStringLiteral("transparentBackground"), enabled);
             applyStyle();
         });
-        connect(systemTheme, &QCheckBox::toggled, this, [this](bool enabled) {
+        connect(systemTheme, &QAction::toggled, this, [this](bool enabled) {
             QSettings().setValue(QStringLiteral("useSystemTheme"), enabled);
             applyStyle();
         });
@@ -296,6 +466,10 @@ public:
         auto *deleteShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Delete")), this);
         connect(deleteShortcut, &QShortcut::activated, this, [this] { removeCurrentTask(); });
         loadTasks();
+        const QSize savedSize = QSettings().value(QStringLiteral("windowSize"), QSize(620, 700)).toSize();
+        if (savedSize.isValid() && !savedSize.isEmpty()) {
+            resize(savedSize.expandedTo(minimumSize()));
+        }
     }
 
 protected:
@@ -312,6 +486,10 @@ protected:
             event->ignore();
             return;
         }
+        const QSize rememberedSize = (isMaximized() || isFullScreen() || isMinimized())
+            ? normalGeometry().size() : size();
+        if (rememberedSize.isValid() && !rememberedSize.isEmpty())
+            QSettings().setValue(QStringLiteral("windowSize"), rememberedSize);
         QMainWindow::closeEvent(event);
     }
 
@@ -343,7 +521,7 @@ private:
 
     QTextEdit *currentEditor() const
     {
-        if (list->currentItem()) {
+        if (list->currentItem() && !list->currentItem()->isHidden()) {
             if (auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->currentItem())))
                 return row->editor;
         }
@@ -363,14 +541,17 @@ private:
         return dynamic_cast<TaskRow *>(list->itemWidget(list->currentItem()));
     }
 
-    void addTask(const QString &html = QString())
+    void addTask(const QString &html = QString(), int position = -1)
     {
         if (loadFailed)
             return;
-        auto *item = new QListWidgetItem(list);
+        auto *item = new QListWidgetItem;
+        list->insertItem(position < 0 ? list->count() : qMin(position, list->count()), item);
         auto *row = new TaskRow;
         if (!html.isEmpty())
             row->editor->setHtml(html);
+        else
+            row->editor->setFontPointSize(defaultTaskSize);
         row->adjustHeight();
         item->setSizeHint(QSize(0, row->minimumHeight()));
         list->setItemWidget(item, row);
@@ -396,7 +577,23 @@ private:
             item->setSizeHint(QSize(0, row->minimumHeight()));
             saveTasks();
         });
-        connect(row->checkBox, &QCheckBox::toggled, this, [this] { saveTasks(); });
+        connect(row->focusButton, &QToolButton::toggled, this, [this, row](bool active) {
+            if (active) {
+                for (int i = 0; i < list->count(); ++i) {
+                    auto *other = dynamic_cast<TaskRow *>(list->itemWidget(list->item(i)));
+                    if (other && other != row)
+                        other->setInProgress(false);
+                }
+            }
+            row->setInProgress(active);
+            saveTasks();
+        });
+        connect(row->checkBox, &QCheckBox::toggled, this, [this, row](bool done) {
+            if (done)
+                row->setInProgress(false);
+            row->focusButton->setEnabled(!done);
+            saveTasks();
+        });
 
         // Qt finishes laying out restored rich text on the next event loop
         // pass. Recalculate once then so every saved line is visible.
@@ -405,7 +602,7 @@ private:
 
     void removeCurrentTask()
     {
-        if (!list->currentItem())
+        if (!list->currentItem() || list->currentItem()->isHidden())
             return;
         removeTask(list->currentItem());
     }
@@ -414,9 +611,54 @@ private:
     {
         if (!item)
             return;
+        auto *row = dynamic_cast<TaskRow *>(list->itemWidget(item));
+        if (!row)
+            return;
+        deletedTask = DeletedTask{row->editor->toHtml(), row->checkBox->isChecked(),
+                                  row->focusButton->isChecked(), list->row(item)};
+        // A queued height update must not access an item after deletion.
+        row->sizeChangedCallback = nullptr;
         delete list->takeItem(list->row(item));
-        if (list->count() == 0)
+        emptyReplacement = nullptr;
+        if (list->count() == 0) {
             addTask();
+            emptyReplacement = currentRowWidget();
+            emptyReplacement->editor->document()->setModified(false);
+        }
+        restoreButton->show();
+        saveTasks();
+    }
+
+    void restoreTask()
+    {
+        if (!deletedTask || loadFailed)
+            return;
+        const DeletedTask task = *deletedTask;
+        {
+            const QScopedValueRollback<bool> guard(loading, true);
+            // Remove only the untouched blank row created after deleting the last task.
+            if (emptyReplacement && !emptyReplacement->editor->document()->isModified()
+                && !emptyReplacement->checkBox->isChecked() && !emptyReplacement->focusButton->isChecked()) {
+                for (int i = 0; i < list->count(); ++i) {
+                    if (list->itemWidget(list->item(i)) == emptyReplacement) {
+                        emptyReplacement->sizeChangedCallback = nullptr;
+                        delete list->takeItem(i);
+                        break;
+                    }
+                }
+            }
+            emptyReplacement = nullptr;
+            addTask(task.html, task.position);
+            auto *row = currentRowWidget();
+            row->checkBox->setChecked(task.done);
+            if (task.done)
+                completedButton->setChecked(false);
+            if (task.inProgress && !task.done)
+                row->focusButton->setChecked(true);
+            list->scrollToItem(list->currentItem());
+        }
+        deletedTask.reset();
+        restoreButton->hide();
         saveTasks();
     }
 
@@ -438,6 +680,44 @@ private:
                 list->currentItem()->setSizeHint(QSize(0, row->minimumHeight()));
         }
         editor->setFocus();
+        saveTasks();
+    }
+
+    void setAllTaskSizes(int size)
+    {
+        if (loadFailed)
+            return;
+        defaultTaskSize = size;
+        QSettings().setValue(QStringLiteral("defaultTaskSize"), size);
+        QTextCharFormat format;
+        format.setFontPointSize(size);
+        auto resizeDocument = [&format, size](QTextDocument *document) {
+            QFont font = document->defaultFont();
+            font.setPointSize(size);
+            document->setDefaultFont(font);
+            QTextCursor cursor(document);
+            cursor.select(QTextCursor::Document);
+            cursor.mergeCharFormat(format);
+        };
+        {
+            const QScopedValueRollback<bool> guard(loading, true);
+            for (int i = 0; i < list->count(); ++i) {
+                auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(i)));
+                if (!row)
+                    continue;
+                resizeDocument(row->editor->document());
+                row->editor->mergeCurrentCharFormat(format);
+                row->requestHeightUpdate();
+            }
+            if (deletedTask) {
+                QTextDocument document;
+                document.setHtml(deletedTask->html);
+                resizeDocument(&document);
+                deletedTask->html = document.toHtml();
+            }
+        }
+        if (auto *editor = currentEditor())
+            syncFormatControls(editor);
         saveTasks();
     }
 
@@ -469,10 +749,39 @@ private:
         return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/tasks.json");
     }
 
+    void updateCompletedVisibility()
+    {
+        if (loading)
+            return;
+        int completed = 0;
+        for (int i = 0; i < list->count(); ++i) {
+            auto *item = list->item(i);
+            auto *row = dynamic_cast<TaskRow *>(list->itemWidget(item));
+            if (!row)
+                continue;
+            const bool done = row->checkBox->isChecked();
+            completed += done ? 1 : 0;
+            const bool hide = done && completedButton->isChecked();
+            if (hide && item == list->currentItem()) {
+                list->setCurrentItem(nullptr);
+                completedButton->setFocus();
+            }
+            item->setHidden(hide);
+        }
+        completedCount = completed;
+        const QString description = (completedButton->isChecked()
+            ? QStringLiteral("Show completed (%1)") : QStringLiteral("Hide completed (%1)")).arg(completed);
+        completedButton->setToolTip(description);
+        completedButton->setAccessibleName(description);
+        updateCompletedIcon();
+        completedButton->setVisible(completed > 0);
+    }
+
     bool saveTasks()
     {
         if (loading || loadFailed)
             return false;
+        updateCompletedVisibility();
         QDir().mkpath(QFileInfo(dataPath()).absolutePath());
         QJsonArray tasks;
         for (int i = 0; i < list->count(); ++i) {
@@ -482,6 +791,7 @@ private:
             QJsonObject task;
             task[QStringLiteral("html")] = row->editor->toHtml();
             task[QStringLiteral("done")] = row->checkBox->isChecked();
+            task[QStringLiteral("inProgress")] = row->focusButton->isChecked();
             tasks.append(task);
         }
         QSaveFile file(dataPath());
@@ -524,13 +834,88 @@ private:
                 for (const auto &value : document.array()) {
                     const auto task = value.toObject();
                     addTask(task.value(QStringLiteral("html")).toString());
-                    currentRowWidget()->checkBox->setChecked(task.value(QStringLiteral("done")).toBool());
+                    auto *row = currentRowWidget();
+                    row->checkBox->setChecked(task.value(QStringLiteral("done")).toBool());
+                    if (!row->checkBox->isChecked())
+                        row->focusButton->setChecked(task.value(QStringLiteral("inProgress")).toBool());
                 }
             }
         }
         if (list->count() == 0 && !loadFailed)
             addTask();
         loading = false;
+        updateCompletedVisibility();
+    }
+
+    void updateCompletedIcon()
+    {
+        const QColor color = systemTheme->isChecked()
+            ? QApplication::palette().color(QPalette::WindowText) : QColor(Qt::white);
+        const qreal ratio = devicePixelRatioF();
+        const QString count = QString::number(completedCount);
+        const QFontMetrics metrics(completedButton->font());
+        const int width = 36 + metrics.horizontalAdvance(count);
+        QPixmap pixmap(qRound(width * ratio), qRound(28 * ratio));
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath eye;
+        eye.moveTo(2, 14);
+        eye.cubicTo(8, 4, 20, 4, 26, 14);
+        eye.cubicTo(20, 24, 8, 24, 2, 14);
+        painter.drawPath(eye);
+        painter.drawEllipse(QPointF(14, 14), 3, 3);
+        if (completedButton->isChecked())
+            painter.drawLine(QPointF(4, 4), QPointF(24, 24));
+        painter.setFont(completedButton->font());
+        painter.drawText(QRect(36, 0, width - 36, 28), Qt::AlignCenter, count);
+        painter.end();
+        completedButton->setIconSize(QSize(width, 28));
+        completedButton->setIcon(QIcon(pixmap));
+    }
+
+    void updateAddIcon(const QColor &color)
+    {
+        const qreal ratio = devicePixelRatioF();
+        QPixmap pixmap(qRound(28 * ratio), qRound(28 * ratio));
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(color, 4, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(14, 4), QPointF(14, 24));
+        painter.drawLine(QPointF(4, 14), QPointF(24, 14));
+        painter.end();
+        addButton->setIcon(QIcon(pixmap));
+    }
+
+    void updateCompactIcon(const QColor &color)
+    {
+        const qreal ratio = devicePixelRatioF();
+        QPixmap pixmap(qRound(24 * ratio), qRound(24 * ratio));
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        // Four corner arrows point outwards to expand, inwards to compact.
+        for (int x : {-1, 1}) {
+            for (int y : {-1, 1}) {
+                painter.save();
+                painter.translate(12, 12);
+                painter.scale(x, y);
+                const int tip = compactButton->isChecked() ? 9 : 3;
+                const int tail = compactButton->isChecked() ? 3 : 9;
+                painter.drawLine(QPoint(tail, tail), QPoint(tip, tip));
+                painter.drawLine(QPoint(tail, tip), QPoint(tip, tip));
+                painter.drawLine(QPoint(tip, tail), QPoint(tip, tip));
+                painter.restore();
+            }
+        }
+        painter.end();
+        compactButton->setIcon(QIcon(pixmap));
     }
 
     void applyStyle()
@@ -539,6 +924,30 @@ private:
         const bool useSystem = systemTheme->isChecked();
         const QPalette palette = QApplication::palette();
         const QColor textColor = useSystem ? palette.color(QPalette::WindowText) : QColor(Qt::white);
+        updateAddIcon(textColor);
+        updateCompactIcon(textColor);
+        updateCompletedIcon();
+        const QColor menuBackground = useSystem ? palette.color(QPalette::AlternateBase)
+            : (clear ? QColor(20, 23, 31) : QColor(60, 66, 82));
+        const QColor menuHover = useSystem ? palette.color(QPalette::Highlight) : QColor(87, 43, 67);
+        const QColor menuHoverText = useSystem ? palette.color(QPalette::HighlightedText) : QColor(Qt::white);
+        // Keep the popup edge subtle against its background in AR displays.
+        const QColor menuBorder(
+            qRound(menuBackground.red() * 0.85 + textColor.red() * 0.15),
+            qRound(menuBackground.green() * 0.85 + textColor.green() * 0.15),
+            qRound(menuBackground.blue() * 0.85 + textColor.blue() * 0.15));
+        settingsMenu->setStyleSheet(QStringLiteral(
+            "QMenu { font-size: 18px; padding: 8px; background-color: %1; color: %2; border: 1px solid %5; border-radius: 12px; }"
+            "QMenu QLabel { color: %2; background-color: %1; font-size: 18px; }"
+            "QMenu QToolButton { color: %2; background-color: %1; border: 1px solid %5; border-radius: 7px; font-size: 24px; }"
+            "QMenu QToolButton:hover { background-color: %3; color: %4; }"
+            "QMenu QToolButton:disabled { color: #888888; border-color: #888888; }"
+            "QMenu::item { min-height: 48px; padding: 12px 32px; background-color: %1; color: %2; border-radius: 8px; }"
+            "QMenu::item:selected { background-color: %3; color: %4; }"
+            "QMenu::indicator { width: 24px; height: 24px; border: 2px solid %2; border-radius: 5px; background-color: %1; }"
+            "QMenu::indicator:checked { border-color: #ff4f9a; image: url(:/icons/checkmark.svg); }"
+            "QMenu::indicator:unchecked { image: none; }"
+        ).arg(menuBackground.name(), textColor.name(), menuHover.name(), menuHoverText.name(), menuBorder.name()));
         const QColor baseColor = useSystem ? palette.color(QPalette::Base) : QColor(10, 15, 25);
 
         auto rgba = [](QColor color, int alpha) {
@@ -552,9 +961,8 @@ private:
             : (useSystem ? rgba(palette.color(QPalette::Window), 245)
                          : QStringLiteral("rgba(30, 34, 45, 245)"));
         const QString rowBackground = useSystem
-            ? rgba(palette.color(QPalette::AlternateBase), clear ? 145 : 220)
-            : (clear ? QStringLiteral("rgba(30, 34, 45, 125)")
-                     : QStringLiteral("rgba(60, 66, 82, 220)"));
+            ? rgba(palette.color(QPalette::AlternateBase), qRound(rowOpacity * 2.55))
+            : rgba(clear ? QColor(30, 34, 45) : QColor(60, 66, 82), qRound(rowOpacity * 2.55));
         const QString controlBackground = useSystem
             ? rgba(palette.color(QPalette::Button), 245)
             : panelBackground;
@@ -569,14 +977,19 @@ private:
 
         QString style = QStringLiteral(
             "QWidget#panel { background: %1; border-radius: 16px; }"
-            "QLabel#title { color: %3; font-size: 22px; font-weight: 600; }"
-            "QLabel#hint { color: %4; font-size: 14px; }"
             "QListWidget#taskList { background: transparent; }"
             "QListWidget#taskList::item { background: %2; border-radius: 10px; }"
+            "QWidget#taskRow { border: 2px solid transparent; border-radius: 10px; }"
+            "QWidget#taskRow[inProgress=\"true\"] { border: 2px solid #ff4f9a; background: rgba(255, 79, 154, 35); }"
+            "QToolButton#taskFocus { padding: 0px; font-size: 20px; }"
+            "QToolButton#taskFocus:checked { color: #ff4f9a; border-color: #ff4f9a; }"
+            "QToolButton#taskFocus:disabled { color: %4; border-color: transparent; }"
             "QTextEdit { color: %3; background: transparent; font-size: 16pt; }"
             "QCheckBox { color: %3; border-radius: 8px; }"
             "QCheckBox:hover { background: rgba(255, 79, 154, 45); }"
             "QToolButton, QSpinBox { color: %3; background: %5; border: 1px solid %6; border-radius: 7px; padding: 4px 8px; }"
+            "QToolButton#appearanceSettings { font-size: 24px; padding: 0px; }"
+            "QToolButton#appearanceSettings::menu-indicator { image: none; }"
             "QToolButton:checked { background: %5; border: 1px solid rgb(255, 79, 154); }"
             "QToolButton:hover, QSpinBox:hover { background: rgba(255, 79, 154, 75); border: 1px solid rgb(255, 79, 154); }"
             "QLabel#dragHandle { color: %4; background: transparent; border-radius: 8px; font-size: 22px; }"
@@ -598,14 +1011,28 @@ private:
                           .arg(arrowUp).arg(arrowDown));
     }
 
+    struct DeletedTask {
+        QString html;
+        bool done;
+        bool inProgress;
+        int position;
+    };
+    std::optional<DeletedTask> deletedTask;
+    QPointer<TaskRow> emptyReplacement;
+    int defaultTaskSize = 16;
+    int rowOpacity = 50;
+    int completedCount = 0;
+    QToolButton *completedButton = nullptr;
+    QToolButton *restoreButton = nullptr;
     bool loading = false;
     bool loadFailed = false;
     QLabel *saveError = nullptr;
     TaskList *list = nullptr;
-    QCheckBox *transparent = nullptr;
-    QCheckBox *systemTheme = nullptr;
+    QMenu *settingsMenu = nullptr;
+    QAction *transparent = nullptr;
+    QAction *systemTheme = nullptr;
+    QToolButton *compactButton = nullptr;
     QToolButton *addButton = nullptr;
-    QToolButton *removeButton = nullptr;
     QToolButton *boldButton = nullptr;
     QToolButton *italicButton = nullptr;
     QSpinBox *fontSize = nullptr;

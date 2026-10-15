@@ -8,7 +8,14 @@ A small task list for KDE Plasma and KWin VR mode.
 - bold and italic text;
 - font size from 8 to 72 pt;
 - transparent background enabled by default for AR/VR, with your choice remembered;
+- hide/show completed tasks with a count, including in compact mode; the filter is remembered;
+- Restore task undoes the latest deletion during the current session, without a timer, including in compact mode;
+- mark one task as current with ▶; click again to clear, or complete the task (saved across restarts);
+- appearance settings in a gear-button menu, including task background opacity and text size for all tasks;
+- global text size preserves bold/italic and becomes the default for new tasks;
 - larger controls for head-controlled pointers;
+- window size remembered after closing; window placement remains controlled by KDE/AR;
+- the corner-arrow button switches between compact and full view (your choice is remembered);
 - atomic automatic local saving with visible error messages;
 - Ctrl+N to add, Ctrl+S to save, Ctrl+Shift+Delete to remove the current task.
 
