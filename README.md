@@ -1,56 +1,52 @@
 # My List
 
-A small task list for KDE Plasma and KWin VR mode.
+A small task list for KDE Plasma. Made for use in AR glasses with KWin VR and a head-controlled pointer. The interface is in English.
 
-## Features in the first version
+Tasks stay on your computer and save automatically. The background is transparent by default; appearance settings let you adjust it.
 
-- regular tasks with checkboxes;
-- bold and italic text;
-- font size from 8 to 72 pt;
-- transparent background enabled by default for AR/VR, with your choice remembered;
-- hide/show completed tasks with a count, including in compact mode; the filter is remembered;
-- Restore task undoes the latest deletion during the current session, without a timer, including in compact mode;
-- mark one task as current with ▶; click again to clear, or complete the task (saved across restarts);
-- appearance settings in a gear-button menu, including task background opacity and text size for all tasks;
-- global text size preserves bold/italic and becomes the default for new tasks;
-- larger controls for head-controlled pointers;
-- window size remembered after closing; window placement remains controlled by KDE/AR;
-- the corner-arrow button switches between compact and full view (your choice is remembered);
-- atomic automatic local saving with visible error messages;
-- Ctrl+N to add, Ctrl+S to save, Ctrl+Shift+Delete to remove the current task.
+## Build and run
 
-## Authorship
+Requires Qt 6 development packages (Widgets and qmake), a C++17 compiler, and Make.
 
-This project was created from an idea and request by Elvira Platas to make everyday work easier.
-
-The source code for this version was generated and refined with OpenAI Codex (GPT-5) under the direction of the project author.
-
-## Building
-
-Run the following commands in this directory:
-
-```bash
+```sh
 qmake6 writer-todo.pro
 make -j2
 ./writer-todo
 ```
 
-The task list is saved in KDE's application data directory.
+The executable is still named `writer-todo` so existing task data and settings continue to work.
 
-## License
+## Use
 
-This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for the full text.
+- **+** adds a task; the checkbox marks it done; **×** deletes it.
+- **▶** highlights one task to work on now.
+- The **eye** button hides or shows completed tasks.
+- The **corner arrows** switch compact mode on or off. KDE window decorations stay available.
+- The **gear** opens background and whole-list text settings. The bottom controls format the active task or selected text.
+- **Restore task** brings back the latest deleted task during the current session, with no timer.
 
-## Regression checks
+Drag the dotted handle to reorder tasks. Keyboard shortcuts: `Ctrl+N` adds, `Ctrl+S` saves, and `Ctrl+Shift+Delete` deletes the selected task. Hover tooltips are disabled for head-gaze use.
 
-Run in a separate build directory (requires Qt Test):
+## Known limitations
 
-```bash
-mkdir -p /tmp/writer-todo-regression
-cd /tmp/writer-todo-regression
-qmake6 /path/to/writer-todo/tests/regression.pro
+Window size is remembered, but KWin/VR may limit its height when reopening it on a monitor. A reported freeze during text formatting has not been conclusively diagnosed; regression checks pass after changes to text layout handling.
+
+## Checks
+
+Requires Qt Test. From a separate build directory:
+
+```sh
+qmake6 /path/to/my-list/tests/regression.pro
 make -j2
 QT_QPA_PLATFORM=offscreen ./regression
 ```
 
-Tests use temporary data and settings, leaving your task list untouched.
+Checks use temporary task data and settings.
+
+## How it was made
+
+The code was generated and revised by OpenAI Codex, an AI coding assistant. Elvira Platas proposed the app, described how it should work, tested it in AR glasses, and requested changes. She did not write the code.
+
+## License
+
+[MIT License](LICENSE).
