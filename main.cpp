@@ -991,6 +991,7 @@ private:
             "QToolButton#appearanceSettings { font-size: 24px; padding: 0px; }"
             "QToolButton#appearanceSettings::menu-indicator { image: none; }"
             "QToolButton:checked { background: %5; border: 1px solid rgb(255, 79, 154); }"
+            "QToolButton#compactMode { border: 1px solid transparent; }"
             "QToolButton:hover, QSpinBox:hover { background: rgba(255, 79, 154, 75); border: 1px solid rgb(255, 79, 154); }"
             "QLabel#dragHandle { color: %4; background: transparent; border-radius: 8px; font-size: 22px; }"
             "QLabel#dragHandle:hover { color: %3; background: rgba(255, 79, 154, 100); }"
