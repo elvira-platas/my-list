@@ -4,6 +4,8 @@ A small task list for KDE Plasma. Made for use in AR glasses with KWin VR and a 
 
 Tasks stay on your computer and save automatically. The background is transparent by default; appearance settings let you adjust it.
 
+Only one instance can use the same task data at a time. Launching it again leaves the existing window running.
+
 ![My List with a demo task list: feed the dragon, order fireproof curtains, and other daily chores.](docs/my-list.png)
 
 Desktop screenshot on KDE Plasma with a demo list.
@@ -46,6 +48,8 @@ QT_QPA_PLATFORM=offscreen ./regression
 ```
 
 Checks use temporary task data and settings.
+
+To check repeat launches and recovery after a stopped process, run `python3 tests/single_instance.py ./writer-todo` from the project directory after building the app.
 
 ## How it was made
 

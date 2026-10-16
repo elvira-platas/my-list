@@ -23,6 +23,8 @@
 #include <QStyle>
 #include <QStandardPaths>
 #include <QSettings>
+#include <QLockFile>
+#include <QMessageBox>
 #include <QSaveFile>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -1122,6 +1124,25 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("writer-todo"));
     app.setApplicationDisplayName(QStringLiteral("My List"));
     app.setOrganizationName(QStringLiteral("Elvira"));
+
+    const QString dataDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (!QDir().mkpath(dataDirectory)) {
+        QMessageBox::critical(nullptr, QStringLiteral("My List"),
+                              QStringLiteral("Could not create the task data folder."));
+        return 1;
+    }
+    QLockFile instanceLock(dataDirectory + QStringLiteral("/instance.lock"));
+    // A long-running session is not stale. Qt still detects a process that has exited.
+    instanceLock.setStaleLockTime(0);
+    if (!instanceLock.tryLock(0)) {
+        if (instanceLock.error() == QLockFile::LockFailedError) {
+            qWarning("My List is already running; leaving its tasks unchanged.");
+            return 0;
+        }
+        QMessageBox::critical(nullptr, QStringLiteral("My List"),
+                              QStringLiteral("Could not lock the task data folder. Check its permissions."));
+        return 1;
+    }
 
     TodoWindow window;
     window.show();
