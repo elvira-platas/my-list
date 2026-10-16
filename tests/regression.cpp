@@ -226,6 +226,118 @@ int main(int argc, char **argv)
         menu->hide();
         window.close();
     }
+    write(R"([{"html":"<p style='font-size:16pt'>Feed the dragon</p>","done":false}])");
+    auto checkDragonFormatting = [](QTextEdit *editor) {
+        auto at = [editor](int position) {
+            QTextCursor cursor(editor->document());
+            cursor.setPosition(position);
+            cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return cursor.charFormat();
+        };
+        check(editor->toPlainText() == "Feed the dragon!", "formatting preserves task text");
+        check(at(0).fontPointSize() == 28 && at(0).fontWeight() == QFont::Bold && at(0).fontItalic(),
+              "selected word keeps size bold and italic");
+        check(at(5).fontPointSize() == 16 && at(5).fontWeight() != QFont::Bold && !at(5).fontItalic(),
+              "formatting leaves unselected text unchanged");
+        check(at(15).fontPointSize() == 22 && at(15).fontWeight() == QFont::Bold && at(15).fontItalic(),
+              "formatting without selection applies to newly typed text");
+    };
+    {
+        TodoWindow window;
+        window.show();
+        window.activateWindow();
+        window.findChild<QToolButton *>("compactMode")->setChecked(false);
+        auto *list = window.findChild<QListWidget *>("taskList");
+        auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(0)));
+        auto *size = window.findChild<QSpinBox *>("fontSize");
+        QToolButton *bold = nullptr;
+        QToolButton *italic = nullptr;
+        for (auto *button : window.findChildren<QToolButton *>()) {
+            if (button->text() == "B") bold = button;
+            if (button->text() == "I") italic = button;
+        }
+        check(bold && italic, "formatting buttons available");
+        QTest::qWait(30);
+        row->editor->setFocus();
+        QTextCursor cursor(row->editor->document());
+        cursor.setPosition(4, QTextCursor::KeepAnchor);
+        row->editor->setTextCursor(cursor);
+        auto enterSize = [size](const char *value) {
+            size->setFocus();
+            QTest::keyClick(size, Qt::Key_A, Qt::ControlModifier);
+            QTest::keyClicks(size, value);
+            QTest::keyClick(size, Qt::Key_Return);
+        };
+        enterSize("28");
+        QTest::mouseClick(size, Qt::LeftButton, Qt::NoModifier, QPoint(size->width() - 16, 10));
+        check(size->value() == 29, "upper arrow increases selected text size");
+        QTest::mouseClick(size, Qt::LeftButton, Qt::NoModifier, QPoint(size->width() - 16, size->height() - 10));
+        check(size->value() == 28, "lower arrow decreases selected text size");
+        QTest::mouseClick(bold, Qt::LeftButton);
+        QTest::mouseClick(italic, Qt::LeftButton);
+        row->editor->setFocus();
+        cursor = row->editor->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        row->editor->setTextCursor(cursor);
+        enterSize("22");
+        QTest::mouseClick(bold, Qt::LeftButton);
+        QTest::mouseClick(italic, Qt::LeftButton);
+        QTest::keyClicks(row->editor, "!");
+        checkDragonFormatting(row->editor);
+        for (int i = 0; i < 12; ++i) {
+            window.resize(i % 2 ? 420 : 900, 600);
+            QTest::qWait(10);
+        }
+        QTest::qWait(100);
+        QSignalSpy layoutChanges(list->model(), &QAbstractItemModel::dataChanged);
+        QTest::qWait(150);
+        check(layoutChanges.isEmpty(), "mixed-format row layout settles after resizing");
+        checkDragonFormatting(row->editor);
+        check(window.close(), "mixed formatting saves successfully");
+    }
+    {
+        TodoWindow window;
+        auto *list = window.findChild<QListWidget *>("taskList");
+        auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(0)));
+        checkDragonFormatting(row->editor);
+        window.close();
+    }
+    write(R"([{"html":"Saved task","done":false}])");
+    {
+        TodoWindow window;
+        window.show();
+        auto *list = window.findChild<QListWidget *>("taskList");
+        auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(0)));
+        const QByteArray saved = read();
+        const QString backup = path + ".test-backup";
+        // A directory at the destination makes writes fail even when tests run as root.
+        check(QFile::rename(path, backup), "preserve fixture before simulating write failure");
+        check(QDir().mkdir(path), "make task destination unavailable");
+        row->editor->setPlainText("Unsaved dragon task");
+        QLabel *error = nullptr;
+        for (auto *label : window.findChildren<QLabel *>())
+            if (label->text().startsWith("Could not save tasks:")) error = label;
+        check(error && !error->isHidden(), "write failure is shown to the user");
+        check(!window.close() && window.isVisible(), "failed save prevents closing the window");
+        check(row->editor->toPlainText() == "Unsaved dragon task", "failed save keeps edits in memory");
+        QFile previous(backup);
+        check(previous.open(QIODevice::ReadOnly) && previous.readAll() == saved,
+              "previous saved tasks survive failed writes");
+        previous.close();
+        check(QDir().rmdir(path) && QFile::rename(backup, path), "restore writable destination");
+        check(window.close(), "close retries saving after the destination is restored");
+        check(error->isHidden(), "successful retry clears the error");
+        const auto tasks = QJsonDocument::fromJson(read()).array();
+        check(tasks.size() == 1 && tasks.at(0).toObject().value("html").toString().contains("Unsaved dragon task"),
+              "retry saves the latest edits");
+    }
+    {
+        TodoWindow window;
+        auto *list = window.findChild<QListWidget *>("taskList");
+        auto *row = dynamic_cast<TaskRow *>(list->itemWidget(list->item(0)));
+        check(row->editor->toPlainText() == "Unsaved dragon task", "saved retry survives restart");
+        window.close();
+    }
     write("broken JSON");
     {
         TodoWindow window;
