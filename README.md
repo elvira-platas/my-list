@@ -1,10 +1,6 @@
 # My List
 
-A small task list for KDE Plasma. Made for use in AR glasses with KWin VR and a head-controlled pointer. The interface is in English.
-
-Tasks stay on your computer and save automatically. The background is transparent by default; appearance settings let you adjust it.
-
-Only one instance can use the same task data at a time. Launching it again leaves the existing window running.
+A small task list for KDE Plasma.
 
 ![My List with a demo task list: feed the dragon, order fireproof curtains, and other daily chores.](docs/my-list.png)
 
@@ -20,8 +16,6 @@ make -j2
 ./writer-todo
 ```
 
-The executable is still named `writer-todo` so existing task data and settings continue to work.
-
 ## Use
 
 - **+** adds a task; the checkbox marks it done; **×** deletes it.
@@ -32,10 +26,6 @@ The executable is still named `writer-todo` so existing task data and settings c
 - **Restore task** brings back the latest deleted task during the current session, with no timer.
 
 Drag the dotted handle to reorder tasks. Keyboard shortcuts: `Ctrl+N` adds, `Ctrl+S` saves, and `Ctrl+Shift+Delete` deletes the selected task. Hover tooltips are disabled for head-gaze use.
-
-## Known limitations
-
-Window size is remembered, but KWin/VR may limit its height when reopening it on a monitor. A reported freeze during text formatting has not been conclusively diagnosed; regression checks pass after changes to text layout handling.
 
 ## Checks
 
